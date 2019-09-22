@@ -1,8 +1,11 @@
+"""This is a telegram bot that redirects all whatsapp messages to telegram"""
 # Imports everything
 from webwhatsapi import WhatsAPIDriver
 from webwhatsapi.objects.chat import GroupChat
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import Updater, CommandHandler, MessageHandler
 from time import sleep
+from selenium.common.exceptions import NoSuchElementException
+import traceback
 
 # Log every error of the bot
 import logging
@@ -24,10 +27,10 @@ class User(object):
         # Initialize all values
         self.bot = bot
         self.id = chat_id
-        self.driver = WhatsAPIDriver(client="chrome", username="bot", chrome_options=[])
+        self.driver = WhatsAPIDriver(client="firefox", username="bot", chrome_options=[], loadstyles=True)
         self.logged = False
         self.time = 0
-        self.map = {}
+        self.chats = []
 
     def send_message(self, text):
         """
@@ -35,7 +38,70 @@ class User(object):
         :param text: The text to send
         :type text: str
         """
+        # Send a message using the user id
         self.bot.send_message(self.id, text)
+
+    def contains(self, name):
+        """
+        Check if this user has the given chat
+        :param name: The name of the chat to find
+        :type name: str
+        :return: If the chat instance is this user
+        :rtype: bool
+        """
+        # Find the chat by checking every chat
+        for chat in self.chats:
+            if chat.name == name:
+                return True
+        return False
+
+    def get(self, name):
+        """
+        Get the chat instance from the name
+        :param name: The name of the chat to find
+        :type name: str
+        :return: The chat instance
+        :rtype: Chat
+        :raise: If the chat doesn't exist
+        """
+        # Find the chat by checking every chat
+        for chat in self.chats:
+            if chat.name == name:
+                return chat
+        raise Exception('Chat not found')
+
+
+class Chat(object):
+    """Represent a single chat"""
+    def __init__(self, user, whatsapp_chat, telegram_chat_id):
+        """
+        Initialize this chat
+        :param user: The user containing this chat
+        :param whatsapp_chat: The whatsapp chat
+        :param telegram_chat_id: The chat id
+        :type user: User
+        :type whatsapp_chat: webwhatsapi.objects.chat.Chat
+        :type telegram_chat_id: int
+        """
+        self.user = user
+        self.whatsapp_chat = whatsapp_chat
+        self.telegram_chat_id = telegram_chat_id
+
+    def send_whatsapp(self, message):
+        """
+        Send a message to the corresponding whatsapp chat
+        :param message: The message to send
+        :type message: str
+        """
+        self.whatsapp_chat.send_message(message)
+
+    def send_telegram(self, message):
+        """
+        Send a message to the corresponding telegram chat
+        :param message: The message to send
+        :type message: str
+        """
+        self.user.bot.send_message(self.telegram_chat_id, message)
 
 
 def start(bot, update):
@@ -73,7 +139,7 @@ def start_group(bot, update):
     # Tokenize the command
     arguments = update.message.text.split(' ')
     if len(arguments) != 3:
-        bot.send_message(update.message.chat_id, 'Invalid arguments')
+        bot.send_message(update.message.chat_id, 'Invalid arguments, use "/start_group USER_ID WHATSAPP_CHAT_NAME"')
         return
     current_user = None
     # Check if the user exist
@@ -85,10 +151,36 @@ def start_group(bot, update):
     if current_user is None:
         bot.send_message(update.message.chat_id, 'User id not found')
         return
-    # Assign the selected name to the chat
+    # Find the selected whatsapp chat
     name = arguments[2].replace('_', ' ')
-    current_user.map[name] = update.message.chat_id
+    chats = current_user.driver.get_all_chats()
+    current_chat = None
+    for chat in chats:
+        if chat.name == name:
+            current_chat = chat
+            break
+    if current_chat is None:
+        bot.send_message(update.message.chat_id, 'Whatsapp chat not found')
+    # Associate the telegram chat with the whatsapp chat
+    current_user.map.append(Chat(current_user, current_chat, update.message.chat_id))
     bot.send_message(update.message.chat_id, 'Done')
+
+
+def send_message(bot, update):
+    """
+    Callback for a new telegram message to the bot
+    :param bot: The representation of the bot
+    :param update: The event the has happened
+    :type bot: telegram.Bot
+    :type update: telegram.Update
+    """
+    current_user = None
+    chat = None
+    for user in users:
+        if user.containsTelegram(update.message.chat_id):
+            current_user = user
+            chat = user.getTelegram(update.message.chat_id)
+    chat.send_whatsapp(update.message.content)
 
 
 def error(bot, update, exception):
@@ -128,16 +220,24 @@ def loop(updater, user):
     """
     # Check is the user is already logged in
     if not user.logged:
-        if user.driver.is_logged_in():
-            # If the user has logged in updates its status
-            user.logged = True
-            updater.bot.send_message(user.id, 'logged in, your user id is: {}'.format(user.id))
-        else:
-            # After some time send the new qr code to the user
-            user.time += 1
-            if user.time >= 10:
-                user.time = 0
-                send_qr(updater.bot, user)
+        try:
+            if user.driver.is_logged_in():
+                # If the user has logged in updates its status
+                user.logged = True
+                updater.bot.send_message(user.id, 'logged in, your user id is: {}'.format(user.id))
+            else:
+                # After some time send the new qr code to the user
+                user.time += 1
+                if user.time >= 10:
+                    user.time = 0
+                    try:
+                        send_qr(updater.bot, user)
+                    except NoSuchElementException:
+                        # If the user has logged in updates its status
+                        user.logged = True
+                        updater.bot.send_message(user.id, 'logged in, your user id is: {}'.format(user.id))
+        except Exception as e:
+            traceback.print_exc()
     else:
         # Check if there are any unread messages
         for unread_chat in user.driver.get_unread():
@@ -145,15 +245,15 @@ def loop(updater, user):
                 # Check if the message is from a group or from a person
                 # Check if the sender is know, if so send it to the right chat
                 if isinstance(unread_chat.chat, GroupChat):
-                    if unread_chat.chat.name in user.map:
-                        chat = user.map[unread_chat.chat.name]
+                    if user.contains(unread_chat.chat.name):
+                        chat = user.get(unread_chat.chat.name).telegram_chat_id
                         message = '{}: {}'.format(unread.sender.name, unread.content)
                     else:
                         chat = user.id
                         message = '{}: {}: {}'.format(unread_chat.chat.name, unread.sender.name, unread.content)
                 else:
-                    if unread.sender.name in user.map:
-                        chat = user.map[unread.sender.name]
+                    if unread.sender.name in user.chats:
+                        chat = user.chats[unread.sender.name]
                         message = unread.content
                     else:
                         chat = user.id
@@ -170,6 +270,7 @@ def main():
     dp = updater.dispatcher
     dp.add_handler(CommandHandler('start', start))
     dp.add_handler(CommandHandler('start_group', start_group))
+    dp.add_handler(MessageHandler(callback=send_message, filters=None))
     dp.add_error_handler(error)
     updater.start_polling()
     # Loop through the users
