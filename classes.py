@@ -15,7 +15,7 @@ class User(object):
         # Initialize all values
         self.bot = bot
         self.user = user
-        self.driver = WhatsAPIDriver(client="firefox", username="bot", chrome_options=[], loadstyles=True)
+        self.driver = WhatsAPIDriver(client="firefox", username="bot", chrome_options=[], loadstyles=True, headless=True)
         self.logged = False
         self.time = 0
         self.chats = []
