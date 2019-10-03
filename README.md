@@ -13,18 +13,15 @@ This is a telegram bot that permits to receive all whatsapp messages on Telegram
 - Assign a chat to a contact with:
 
 ```
-/start_group USER_ID CONTACT_NAME
+/start_group WHATSAPP_CONTACT_NAME
 ```
 
 ## Local install
 
-You need to install python3 first and chrome driver
+You need to install git first
 
 ```bash
 sudo apt update
-sudo apt install python3
-sudo apt install python3-pip
-sudo apt install chromium-chromedriver
 sudo apt install git
 ```
 
@@ -32,5 +29,10 @@ Clone the project
 
 ```bash
 git clone https://github.com/RikyIsola/WhatsAppWebBot.git
-pip install .
+```
+
+Run the setup script
+
+```bash
+bash setup.py
 ```
